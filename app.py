@@ -9,6 +9,7 @@ import time
 # [ ] merge - check row by row if already present
 # [ ] store main reports in parquet
 # [ ] set dtypes
+# [ ] save files to cloud
 
 load_dotenv(override=True)
 
@@ -144,11 +145,12 @@ def main():
         refresh_page()
 
     reports_df = fetch_reports()
-    reports_df['reportId']=reports_df['reportId'].astype(str)
-    reports_df = pd.concat([reports_df, reports_df['dataIncluded'].apply(pd.Series)], axis=1)
-    reports_df = reports_df.drop(columns='dataIncluded')
 
     if not reports_df.empty:
+        reports_df['reportId'] = reports_df['reportId'].astype(str)
+        reports_df = pd.concat([reports_df, reports_df['dataIncluded'].apply(pd.Series)], axis=1)
+        reports_df = reports_df.drop(columns='dataIncluded')
+
         st.dataframe(reports_df)
         
         if not reports_df.query('status == "Finished"').empty:
