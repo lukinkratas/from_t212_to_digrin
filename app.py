@@ -6,11 +6,6 @@ import requests
 from dotenv import load_dotenv
 import time
 
-# [ ] merge - check row by row if already present
-# [ ] store main reports in parquet
-# [ ] set dtypes
-# [ ] save files to cloud
-
 load_dotenv(override=True)
 
 TICKER_BLACKLIST = [
