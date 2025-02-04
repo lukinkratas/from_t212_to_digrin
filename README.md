@@ -25,3 +25,7 @@ streamlit run app.py
     - [ ] set dtypes
 
     - [ ] save files to aws
+
+    - [ ] remove s3fs dep in s3_put_df
+
+    - [ ] add reading from s3
