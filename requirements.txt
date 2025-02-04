@@ -1,2 +1,6 @@
 pandas
 streamlit
+boto3
+python-dotenv
+logging
+s3fs

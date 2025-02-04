@@ -5,8 +5,11 @@ from datetime import datetime, timedelta
 import requests
 from dotenv import load_dotenv
 import time
-
-load_dotenv(override=True)
+import logging
+import boto3
+from botocore.exceptions import ClientError
+from io import StringIO
+from s3fs import S3FileSystem
 
 TICKER_BLACKLIST = [
     'VNTRF', # due to stock split
@@ -36,10 +39,32 @@ def map_ticker(ticker):
     
     return ticker_map.get(ticker, ticker)
 
-def transform(csv_filename):
+def s3_put_object(file_bytes, key:str):
+
+    s3_client = boto3.client('s3')
+
+    try:
+        response = s3_client.put_object(
+            Body=file_bytes,
+            Bucket='from-t212-to-digrin',
+            Key=key
+        )
+    except ClientError as e:
+        logging.error(e)
+        return False
+    return True
+
+def s3_put_df(df, key:str):
+
+    s3_filesystem = S3FileSystem()
+
+    with s3_filesystem.open(f's3://from-t212-to-digrin/{key}', 'w') as s3_file:
+        df.to_csv(s3_file, index=False)
+
+def transform(file_bytes):
 
     # Read input CSV
-    df = pd.read_csv(os.path.join('from_t212', csv_filename))
+    df = pd.read_csv(StringIO(file_bytes.decode('utf-8')))
 
     # Filter out blacklisted tickers
     df = df[~df['Ticker'].isin(TICKER_BLACKLIST)]
@@ -48,8 +73,7 @@ def transform(csv_filename):
     # Apply the mapping to the ticker column
     df['Ticker'] = df['Ticker'].apply(map_ticker)
     
-    # Create output filename and save
-    df.to_csv(os.path.join('to_digrin', csv_filename), index=False)
+    return df
 
 @st.cache_data
 def fetch_reports():
@@ -110,6 +134,8 @@ def merge_csvs(from_csv_filename, to_csv_filename):
 
 def main():
 
+    load_dotenv(override=True)
+
     st.set_page_config(layout="wide")
     st.title('T212 to Digrin Convertor')
 
@@ -127,9 +153,13 @@ def main():
 
     col1, col2 = st.columns([0.8, 0.2], vertical_alignment='bottom')
 
-    start_date, end_date = col1.date_input('Period', (last_dt+timedelta(days=1), datetime.now()))
-    start_dt = datetime.combine(start_date, datetime.min.time()).strftime('%Y-%m-%dT%H:%M:%SZ')
-    end_dt = datetime.combine(end_date, datetime.max.time()).strftime('%Y-%m-%dT%H:%M:%SZ')
+    try:
+        start_date, end_date = col1.date_input('Period', (last_dt+timedelta(days=1), datetime.now()))
+    except ValueError:
+        st.error('Invalid date')
+    else:
+        start_dt = datetime.combine(start_date, datetime.min.time()).strftime('%Y-%m-%dT%H:%M:%SZ')
+        end_dt = datetime.combine(end_date, datetime.max.time()).strftime('%Y-%m-%dT%H:%M:%SZ')
 
     if col2.button('Export', use_container_width=True):
         create_export(start_dt, end_dt)
@@ -159,16 +189,16 @@ def main():
                     response = requests.get(report_row.downloadLink)
 
                     if response.status_code == 200:
-                        with open(os.path.join('from_t212', csv_filename), 'wb') as new_csv:
-                            new_csv.write(response.content)
+                        s3_put_object(
+                            file_bytes=response.content,
+                            key=f'raw_from_t212/{csv_filename}'
+                        )
                         col3.markdown('Downloaded to "from_t212" :white_check_mark:')
-                        transform(csv_filename)
+                        df = transform(response.content)
+                        s3_put_df(df, key=f'bronze_to_digrin/{csv_filename}')
                         col3.markdown('Transformed to "to_digrin" :white_check_mark:')
                     else:
                         col3.markdown(f':x: {response.status_code=}')
-
-    else:
-        pass
 
     st.header('CSVs library')
     csv = st.selectbox('Csv:', from_t212_csvs, index=2)
