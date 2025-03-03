@@ -5,12 +5,10 @@ from datetime import datetime, timedelta
 import requests
 from dotenv import load_dotenv
 import time
-import logging
-import boto3
-from botocore.exceptions import ClientError
 from io import StringIO
-from s3fs import S3FileSystem
+from custom_utils import s3_put_object, s3_put_df, s3_list_objects, s3_read_df
 
+BUCKET_NAME = 'from-t212-to-digrin'
 TICKER_BLACKLIST = [
     'VNTRF', # due to stock split
     'BRK.A', # not available in digrin
@@ -39,32 +37,10 @@ def map_ticker(ticker):
     
     return ticker_map.get(ticker, ticker)
 
-def s3_put_object(file_bytes, key:str):
-
-    s3_client = boto3.client('s3')
-
-    try:
-        response = s3_client.put_object(
-            Body=file_bytes,
-            Bucket='from-t212-to-digrin',
-            Key=key
-        )
-    except ClientError as e:
-        logging.error(e)
-        return False
-    return True
-
-def s3_put_df(df, key:str):
-
-    s3_filesystem = S3FileSystem()
-
-    with s3_filesystem.open(f's3://from-t212-to-digrin/{key}', 'w') as s3_file:
-        df.to_csv(s3_file, index=False)
-
-def transform(file_bytes):
+def transform(df_bytes):
 
     # Read input CSV
-    df = pd.read_csv(StringIO(file_bytes.decode('utf-8')))
+    df = pd.read_csv(StringIO(df_bytes.decode('utf-8')))
 
     # Filter out blacklisted tickers
     df = df[~df['Ticker'].isin(TICKER_BLACKLIST)]
@@ -139,12 +115,13 @@ def main():
     st.set_page_config(layout="wide")
     st.title('T212 to Digrin Convertor')
 
-    from_t212_csvs = [filename for filename in os.listdir('from_t212') if filename.endswith('csv')]
-    digrin_csvs = [filename for filename in os.listdir('to_digrin') if filename.endswith('csv')]
+    s3_key_names = s3_list_objects(BUCKET_NAME)
+    from_t212_csvs = [key_name for key_name in  s3_key_names if key_name.startswith('raw_from_t212') and key_name.endswith('csv')]
+    digrin_csvs = [key_name for key_name in  s3_key_names if key_name.startswith('bronze_to_digrin') and key_name.endswith('csv')]
 
     last_dts = []
     for csv_filename in from_t212_csvs:
-        df = pd.read_csv(os.path.join('from_t212', csv_filename))
+        df = s3_read_df(bucket=BUCKET_NAME, key=csv_filename)
         last_dts.append(pd.to_datetime(df['Time'].str.split().str[0], format='%Y-%m-%d').max())
 
     last_dt = max(last_dts)
@@ -190,39 +167,24 @@ def main():
 
                     if response.status_code == 200:
                         s3_put_object(
-                            file_bytes=response.content,
+                            bytes=response.content,
+                            bukcet='from-t212-to-digrin',
                             key=f'raw_from_t212/{csv_filename}'
                         )
                         col3.markdown('Downloaded to "from_t212" :white_check_mark:')
                         df = transform(response.content)
-                        s3_put_df(df, key=f'bronze_to_digrin/{csv_filename}')
+                        s3_put_df(
+                            df,
+                            bucket=BUCKET_NAME,
+                            key=f'bronze_to_digrin/{csv_filename}'
+                        )
                         col3.markdown('Transformed to "to_digrin" :white_check_mark:')
                     else:
                         col3.markdown(f':x: {response.status_code=}')
 
     st.header('CSVs library')
-    csv = st.selectbox('Csv:', from_t212_csvs, index=2)
-    df = pd.read_csv(os.path.join('from_t212', csv))
+    csv_filename = st.selectbox('Csv:', from_t212_csvs, index=2)
+    df = s3_read_df(bucket=BUCKET_NAME, key=csv_filename)
     st.dataframe(df.sort_values('Time', ascending=False))
-
-    st.header('Transform')
-    col1, col2, col3 = st.columns([0.7, 0.2, 0.1], vertical_alignment='bottom')
-    csv_filename = col1.selectbox('Csv:', from_t212_csvs)
-    if col2.button('Transform', use_container_width=True):
-        transform(csv_filename)
-        st.rerun()
-    if csv_filename in digrin_csvs:
-        col3.markdown('Transformed: :white_check_mark:')
-    else:
-        col3.markdown('Transformed: :x:')
-
-
-    st.header('Merge')
-    col1, col2, col3, col4 = st.columns([0.35, 0.35, 0.2, 0.1], vertical_alignment='bottom')
-    from_csv_filename = col1.selectbox('From:', from_t212_csvs, key='from_csv')
-    to_csv_filename = col2.selectbox('Append To:', from_t212_csvs, key='to_csv')
-    if col3.button('Merge', use_container_width=True):
-        merge_csvs(from_csv_filename, to_csv_filename)
-        col4.markdown('Merged: :white_check_mark:')
 
 main()
