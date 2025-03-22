@@ -1,12 +1,14 @@
-import pandas as pd
 import os
-import streamlit as st
-from datetime import datetime, timedelta
-import requests
-from dotenv import load_dotenv
 import time
+from datetime import datetime, timedelta
 from io import StringIO
-from custom_utils import s3_put_object, s3_put_df, s3_list_objects, s3_read_df
+
+import pandas as pd
+import requests
+import streamlit as st
+from dotenv import load_dotenv
+
+from custom_utils import s3_list_objects, s3_put_df, s3_put_object, s3_read_df
 
 BUCKET_NAME = 'from-t212-to-digrin'
 TICKER_BLACKLIST = [
@@ -62,9 +64,9 @@ def fetch_reports():
 
     if response.status_code == 200:
         return pd.DataFrame(response.json())
-    else:
-        st.markdown(f':x: {response.status_code=}')
-        return None
+
+    st.markdown(f':x: {response.status_code=}')
+    return None
 
 def refresh_page():
     st.cache_data.clear()
@@ -116,13 +118,16 @@ def main():
     st.title('T212 to Digrin Convertor')
 
     s3_key_names = s3_list_objects(BUCKET_NAME)
-    from_t212_csvs = [key_name for key_name in  s3_key_names if key_name.startswith('raw_from_t212') and key_name.endswith('csv')]
-    digrin_csvs = [key_name for key_name in  s3_key_names if key_name.startswith('bronze_to_digrin') and key_name.endswith('csv')]
+    from_t212_csvs = filter(lambda key_name: key_name.startswith('raw_from_t212') and key_name.endswith('csv'), s3_key_names)
 
     last_dts = []
+
     for csv_filename in from_t212_csvs:
+        
         df = s3_read_df(bucket=BUCKET_NAME, key=csv_filename)
-        last_dts.append(pd.to_datetime(df['Time'].str.split().str[0], format='%Y-%m-%d').max())
+        last_dts.append(
+            pd.to_datetime(df['Time'].str.split().str[0], format='%Y-%m-%d').max()
+        )
 
     last_dt = max(last_dts)
 
@@ -131,12 +136,24 @@ def main():
     col1, col2 = st.columns([0.8, 0.2], vertical_alignment='bottom')
 
     try:
-        start_date, end_date = col1.date_input('Period', (last_dt+timedelta(days=1), datetime.now()))
+        start_date, end_date = col1.date_input(
+            'Period',
+            (last_dt+timedelta(days=1), datetime.now())
+        )
+
     except ValueError:
         st.error('Invalid date')
+
     else:
-        start_dt = datetime.combine(start_date, datetime.min.time()).strftime('%Y-%m-%dT%H:%M:%SZ')
-        end_dt = datetime.combine(end_date, datetime.max.time()).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        start_dt = datetime.combine(
+            start_date,
+            datetime.min.time()
+        ).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        end_dt = datetime.combine(
+            end_date, datetime.max.time()
+        ).strftime('%Y-%m-%dT%H:%M:%SZ')
 
     if col2.button('Export', use_container_width=True):
         create_export(start_dt, end_dt)
@@ -150,18 +167,34 @@ def main():
 
     if not reports_df.empty:
         reports_df['reportId'] = reports_df['reportId'].astype(str)
-        reports_df = pd.concat([reports_df, reports_df['dataIncluded'].apply(pd.Series)], axis=1)
+        reports_df = pd.concat(
+            [reports_df, reports_df['dataIncluded'].apply(pd.Series)],
+            axis=1
+        )
         reports_df = reports_df.drop(columns='dataIncluded')
 
         st.dataframe(reports_df)
         
         if not reports_df.query('status == "Finished"').empty:
             for report_row in reports_df.itertuples():
-                col1, col2, col3 = st.columns([0.6, 0.2, 0.2], vertical_alignment='bottom')
-                time_from = parse_t212_timestamp(report_row.timeFrom).strftime('%Y-%m-%d')
-                time_to = parse_t212_timestamp(report_row.timeTo).strftime('%Y-%m-%d')
-                csv_filename = col1.text_input('', f'{report_row.reportId}_{time_from}_{time_to}.csv')
-                if col2.button(f'Download {report_row.reportId}', use_container_width=True):
+                col1, col2, col3 = st.columns(
+                    [0.6, 0.2, 0.2],
+                    vertical_alignment='bottom'
+                )
+                time_from = parse_t212_timestamp(
+                    report_row.timeFrom
+                ).strftime('%Y-%m-%d')
+                time_to = parse_t212_timestamp(
+                    report_row.timeTo
+                ).strftime('%Y-%m-%d')
+                csv_filename = col1.text_input(
+                    '',
+                    f'{report_row.reportId}_{time_from}_{time_to}.csv'
+                )
+                if col2.button(
+                    f'Download {report_row.reportId}',
+                    use_container_width=True
+                ):
 
                     response = requests.get(report_row.downloadLink)
 
